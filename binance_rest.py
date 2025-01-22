@@ -170,20 +170,59 @@ class BinanceWebSocket:
         def on_message(ws, message):
             logger.debug(f"WebSocket message received: {message}")
             data = json.loads(message)
+
+            # Check for order updates
             if data.get("e") == "ORDER_TRADE_UPDATE":
                 order_info = data["o"]
                 order_id = order_info["i"]
-                status = order_info["X"]
-                avg_price = float(order_info.get("ap", 0.0))
+                status = order_info["X"]  # Status of the order
+                avg_price = float(order_info.get("ap", 0))  # Average price
+                quantity = float(order_info.get("z", 0))  # Cumulative filled quantity
+                symbol = order_info["s"]  # Symbol (e.g., LINKUSDT)
+                side = order_info["S"]  # Side (BUY/SELL)
 
-                if status == "FILLED" and order_id in self.rest_client.order_map:
-                    order_details = self.rest_client.order_map.pop(order_id)
-                    self.rest_client.place_take_profit(
-                        order_details["symbol"],
-                        order_details["side"],
-                        avg_price,
-                        order_details["tp_percent"]
-                    )
+                # Check if the order is fully filled
+                if status == "FILLED":
+                    logger.info(f"Order {order_id} for {symbol} filled at avg price: {avg_price}.")
+
+                    # Example take-profit percentage
+                    take_profit_percent = 0.5  # Replace with dynamic value if needed
+
+                    # Calculate take-profit price
+                    if side == "BUY":
+                        take_profit_price = avg_price * (1 + take_profit_percent / 100)
+                        tp_side = "SELL"
+                    else:  # For SELL orders
+                        take_profit_price = avg_price * (1 - take_profit_percent / 100)
+                        tp_side = "BUY"
+
+                    logger.info(f"Calculated take-profit price: {take_profit_price} for {symbol}.")
+
+                    # Place the take-profit order
+                    try:
+                        tp_params = {
+                            "symbol": symbol,
+                            "side": tp_side,
+                            "type": "TAKE_PROFIT_MARKET",
+                            "stopPrice": "{:.2f}".format(take_profit_price),
+                            "quantity": "{:.1f}".format(quantity),
+                            "timestamp": self.rest_client.get_server_time(),
+                            "recvWindow": 5000
+                        }
+                        tp_params["signature"] = self.rest_client.create_signature(tp_params)
+                        headers = {"X-MBX-APIKEY": self.rest_client.api_key}
+
+                        url = f"{self.rest_client.base_url}/fapi/v1/order"
+                        response = requests.post(url, headers=headers, data=tp_params)
+                        logger.debug(f"Take-profit response: {response.text}")
+
+                        if response.status_code == 200:
+                            logger.info(f"Take-profit order successfully placed: {response.json()}")
+                        else:
+                            logger.error(f"Failed to place take-profit order: {response.text}")
+
+                    except Exception as e:
+                        logger.error(f"Error placing take-profit order: {e}", exc_info=True)
 
         def on_open(ws):
             logger.info("WebSocket connection opened.")
