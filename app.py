@@ -1,44 +1,70 @@
 import logging
 from flask import Flask, request, jsonify
-from binance_rest import BinanceRESTClient, BinanceWebSocket
+from binance_rest import BinanceRESTClient
+from binance_websocket import BinanceWebSocket
 from utils import parse_webhook_to_payload
+from dotenv import load_dotenv
+import os
 
-# Initialize the Flask app
+# Load environment variables
+load_dotenv()
+
+# Initialize Flask app
 app = Flask(__name__)
 
-# Set up logging for the application
+# Set up logging
 logger = logging.getLogger("main")
 logging.basicConfig(level=logging.INFO)
 
-# Initialize Binance REST and WebSocket Client
+# Initialize Binance REST and WebSocket clients
 rest_client = BinanceRESTClient()
 ws_client = BinanceWebSocket(rest_client)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """
-    Handle incoming TradingView webhook and place orders.
+    Handle incoming TradingView webhook and process orders based on the signal.
     """
     try:
-        logger.info("Received webhook.")
+        logger.info("Webhook received.")
         data = request.get_json()
         logger.debug(f"Webhook payload received: {data}")
 
-        # Convert webhook data to the payload format expected by the Binance client
+        # Parse the payload
         payload = parse_webhook_to_payload(data)
         logger.info(f"Parsed payload: {payload}")
 
-        # Place the order using Binance REST Client
-        response = rest_client.place_market_order(
-            symbol=payload["symbol"],
-            side=payload["side"],
-            quantity=payload["quantity"],
-            leverage=payload["leverage"],
-            take_profit_percent=payload.get("take_profit")
-        )
-        logger.info(f"Order response: {response}")
+        # Determine action based on trade_type
+        trade_type = payload["trade_type"]
 
-        # Return the Binance order response as JSON
+        if trade_type == "EXIT":
+            # Exit position
+            logger.info(f"Exit signal received for {payload['symbol']}.")
+            response = rest_client.close_position(payload["symbol"])
+        elif trade_type == "SELL":
+            # Sell position
+            logger.info(f"Sell signal received for {payload['symbol']}.")
+            response = rest_client.place_market_order(
+                symbol=payload["symbol"],
+                side="SELL",
+                quantity=payload["quantity"],
+                leverage=payload["leverage"],
+                take_profit_percent=payload.get("take_profit")
+            )
+        elif trade_type == "BUY":
+            # Buy position
+            logger.info(f"Buy signal received for {payload['symbol']}.")
+            response = rest_client.place_market_order(
+                symbol=payload["symbol"],
+                side="BUY",
+                quantity=payload["quantity"],
+                leverage=payload["leverage"],
+                take_profit_percent=payload.get("take_profit")
+            )
+        else:
+            raise ValueError(f"Unknown trade type: {trade_type}")
+
+        logger.info(f"Order response: {response}")
         return jsonify(response)
 
     except Exception as e:
@@ -48,11 +74,14 @@ def webhook():
 
 if __name__ == "__main__":
     try:
-        # Initialize the WebSocket connection before starting the Flask app
         logger.info("Starting WebSocket connection...")
         ws_client.start()
     except Exception as e:
-        logger.error(f"Failed to start WebSocket: {e}", exc_info=True)
+        logger.error(f"WebSocket failed to start: {e}", exc_info=True)
 
-    # Start the Flask app
-    app.run(debug=True, host="0.0.0.0", port=8080)
+    # Run Flask app
+    app.run(
+        debug=os.getenv("FLASK_DEBUG", "False").lower() == "true",
+        host="0.0.0.0",
+        port=int(os.getenv("FLASK_PORT", 8080))
+    )
