@@ -23,7 +23,8 @@ class BinanceWebSocket:
         self.ws_thread = None
         self.websocket_url = os.getenv("WEBSOCKET_URL")
         self.tp_tracker = {}  # Track if TP orders are already placed for symbols
-
+        self.reconnect_attempts = 0  # Initialize reconnect attempts
+        
     def start(self):
         """
         Start the WebSocket connection.

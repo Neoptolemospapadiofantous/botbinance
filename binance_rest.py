@@ -254,3 +254,20 @@ class BinanceRESTClient:
                 logger.error(f"Failed to cancel TP order: {response.text}")
         except Exception as e:
             logger.error(f"Error cancelling TP order for {symbol}: {e}", exc_info=True)
+
+    def renew_listen_key(self, listen_key):
+        """
+        Renew the listen key to keep the WebSocket connection alive.
+        """
+        try:
+            url = f"{self.base_url}/fapi/v1/listenKey"
+            headers = {"X-MBX-APIKEY": self.api_key}
+            response = requests.put(url, headers=headers, params={"listenKey": listen_key})
+            response.raise_for_status()
+            logger.info("Successfully renewed listen key.")
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error renewing listen key: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error renewing listen key: {e}", exc_info=True)
+            raise
