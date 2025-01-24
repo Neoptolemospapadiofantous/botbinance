@@ -88,13 +88,18 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
-.venv
+# Ignore all virtual environment folders and environment files, except .env
+.env/
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+pyvenv.cfg
+
+# Allow .env to be tracked
+!.env
 
 # Spyder project settings
 .spyderproject
@@ -120,4 +125,20 @@ dmypy.json
 # pyright
 pyrightconfig.json
 
+# Logs and temporary files
+*.log
+tmp/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Exclude Pipenv/Poetry files
+Pipfile
+Pipfile.lock
+poetry.lock
+
 # End of file
+
+
+pyvenv.cfg
