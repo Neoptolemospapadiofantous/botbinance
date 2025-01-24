@@ -148,7 +148,7 @@ class BinanceWebSocket:
 
             # Calculate TP price and place TP order
             try:
-                take_profit_percent = 0.5  # Example TP percent; you can adjust dynamically
+                take_profit_percent = 0.2  # Example TP percent; you can adjust dynamically
                 if side == "BUY":
                     tp_price = avg_price * (1 + take_profit_percent / 100)
                     tp_side = "SELL"
