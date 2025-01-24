@@ -18,7 +18,8 @@ class BinanceRESTClient:
         self.api_key = os.getenv("BINANCE_API_KEY")
         self.secret_key = os.getenv("BINANCE_SECRET_KEY")
         self.base_url = os.getenv("BASE_URL")
-
+        self.tp_tracker = {}  # Track TP orders by symbol
+        
         if not all([self.api_key, self.secret_key, self.base_url]):
             raise ValueError("Missing required environment variables. Check your .env file.")
 
@@ -110,32 +111,36 @@ class BinanceRESTClient:
 
     def place_take_profit_order(self, symbol, side, quantity, take_profit_price):
         """
-        Place a TAKE_PROFIT_MARKET order.
+        Place a TAKE_PROFIT_MARKET order and track it in the TP tracker.
         """
         try:
-            url = f"{self.base_url}/fapi/v1/order"
-            params = {
+            tp_params = {
                 "symbol": symbol,
-                "side": side.upper(),
+                "side": side,
                 "type": "TAKE_PROFIT_MARKET",
-                "stopPrice": f"{take_profit_price:.2f}",
-                "quantity": f"{quantity:.6f}",
-                "priceProtect": True,  # Price protection
+                "stopPrice": "{:.2f}".format(take_profit_price),
+                "quantity": "{:.1f}".format(quantity),
                 "timestamp": self.get_server_time(),
+                "recvWindow": 5000,
             }
-            params["signature"] = self.create_signature(params)
+            tp_params["signature"] = self.create_signature(tp_params)
             headers = {"X-MBX-APIKEY": self.api_key}
 
-            response = requests.post(url, headers=headers, params=params)
-            response.raise_for_status()
+            url = f"{self.base_url}/fapi/v1/order"
+            response = requests.post(url, headers=headers, data=tp_params)
+            logger.debug(f"Take-profit response: {response.text}")
 
-            tp_response = response.json()
-            logger.info(f"Take-profit order placed successfully: {tp_response}")
-            return tp_response
+            if response.status_code == 200:
+                tp_order_id = response.json()["orderId"]
+                # Add to TP tracker
+                self.tp_tracker[symbol] = tp_order_id
+                logger.info(f"Take-profit order successfully placed: {response.json()}")
+            else:
+                logger.error(f"Failed to place take-profit order: {response.text}")
 
         except Exception as e:
-            logger.error(f"Failed to place take-profit order: {e}", exc_info=True)
-            raise
+            logger.error(f"Error placing take-profit order: {e}", exc_info=True)
+
 
 
     def get_listen_key(self):
@@ -163,11 +168,9 @@ class BinanceRESTClient:
         try:
             logger.info(f"Fetching position info for symbol: {symbol}")
 
-            # Add mandatory timestamp and signature
+            # Fetch position details
             url = f"{self.base_url}/fapi/v2/positionRisk"
-            params = {
-                "timestamp": self.get_server_time(),
-            }
+            params = {"timestamp": self.get_server_time()}
             params["signature"] = self.create_signature(params)
             headers = {"X-MBX-APIKEY": self.api_key}
 
@@ -176,24 +179,26 @@ class BinanceRESTClient:
             response.raise_for_status()
 
             positions = response.json()
-
-            # Find the position for the specified symbol
             position = next((p for p in positions if p["symbol"] == symbol), None)
 
             if not position:
                 raise ValueError(f"No position found for symbol: {symbol}")
 
-            # Check if the position size is zero
             position_amt = float(position["positionAmt"])
             if position_amt == 0:
                 logger.info(f"No open position to close for symbol: {symbol}")
                 return {"message": f"No position to close for {symbol}", "status": "success"}
 
-            # Determine the close side (opposite direction of current position)
+            # Cancel existing TP order if tracked
+            tp_order_id = self.tp_tracker.get(symbol)
+            if tp_order_id:
+                self.cancel_existing_tp(symbol, tp_order_id)
+
+            # Determine close side and quantity
             close_side = "SELL" if position_amt > 0 else "BUY"
             quantity = abs(position_amt)
 
-            # Place a MARKET order to close the position
+            # Place MARKET order to close position
             logger.info(f"Placing MARKET order to close position: {symbol}, Side={close_side}, Quantity={quantity}")
             url = f"{self.base_url}/fapi/v1/order"
             params = {
@@ -209,6 +214,11 @@ class BinanceRESTClient:
 
             response.raise_for_status()
             close_response = response.json()
+
+            # Remove symbol from TP tracker after exiting
+            if symbol in self.tp_tracker:
+                del self.tp_tracker[symbol]
+
             logger.info(f"Position closed successfully for {symbol}: {close_response}")
             return close_response
 
@@ -218,3 +228,29 @@ class BinanceRESTClient:
         except Exception as e:
             logger.error(f"Error closing position for {symbol}: {e}", exc_info=True)
             raise
+
+
+
+    def cancel_existing_tp(self, symbol, tp_order_id):
+        """
+        Cancel an existing TP order for a symbol.
+        """
+        try:
+            logger.info(f"Cancelling existing TP order {tp_order_id} for {symbol}.")
+            cancel_params = {
+                "symbol": symbol,
+                "orderId": tp_order_id,
+                "timestamp": self.get_server_time(),
+            }
+            cancel_params["signature"] = self.create_signature(cancel_params)
+            headers = {"X-MBX-APIKEY": self.api_key}
+
+            url = f"{self.base_url}/fapi/v1/order"
+            response = requests.delete(url, headers=headers, params=cancel_params)
+
+            if response.status_code == 200:
+                logger.info(f"Successfully canceled TP order {tp_order_id} for {symbol}.")
+            else:
+                logger.error(f"Failed to cancel TP order: {response.text}")
+        except Exception as e:
+            logger.error(f"Error cancelling TP order for {symbol}: {e}", exc_info=True)

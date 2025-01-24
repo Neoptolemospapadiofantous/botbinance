@@ -120,43 +120,50 @@ class BinanceWebSocket:
             logger.debug(f"Position update: {position}")
 
     def handle_order_trade_update(self, data):
-            """
-            Handle the ORDER_TRADE_UPDATE event from WebSocket.
-            """
-            logger.info(f"Order trade update: {data}")
-            order_info = data.get("o", {})
-            status = order_info.get("X")  # Order status (e.g., "FILLED")
-            symbol = order_info.get("s")  # Symbol (e.g., "LINKUSDT")
-            avg_price = float(order_info.get("ap", 0))  # Average fill price
-            quantity = float(order_info.get("z", 0))  # Filled quantity
-            side = order_info.get("S")  # Side (e.g., "BUY", "SELL")
+        """
+        Handle the ORDER_TRADE_UPDATE event from WebSocket.
+        """
+        logger.info(f"Order trade update: {data}")
+        order_info = data.get("o", {})
+        status = order_info.get("X")  # Order status (e.g., "FILLED")
+        symbol = order_info.get("s")  # Symbol (e.g., "LINKUSDT")
+        avg_price = float(order_info.get("ap", 0))  # Average fill price
+        quantity = float(order_info.get("z", 0))  # Filled quantity
+        side = order_info.get("S")  # Side (e.g., "BUY", "SELL")
 
-            # Check if the order is FILLED and it's a MARKET order
-            if status == "FILLED" and order_info.get("o") == "MARKET":
-                logger.info(f"Market order filled for {symbol} at avg price: {avg_price}.")
+        # Check if the order is FILLED and it's a MARKET order
+        if status == "FILLED" and order_info.get("o") == "MARKET":
+            logger.info(f"Market order filled for {symbol} at avg price: {avg_price}.")
 
-                # Check if TP order is already placed
-                if symbol in self.tp_tracker:
-                    logger.info(f"TP order already placed for {symbol}. Skipping.")
-                    return
+            # Skip placing TP if the position was exited
+            if symbol in self.tp_tracker and self.tp_tracker[symbol] == "EXIT":
+                logger.info(f"Exit signal detected for {symbol}. Skipping TP placement.")
+                del self.tp_tracker[symbol]  # Clean up tracker after exit
+                return
 
-                # Calculate TP price and place TP order
-                try:
-                    take_profit_percent = 0.5  # Example TP percent; you can adjust dynamically
-                    if side == "BUY":
-                        tp_price = avg_price * (1 + take_profit_percent / 100)
-                        tp_side = "SELL"
-                    else:
-                        tp_price = avg_price * (1 - take_profit_percent / 100)
-                        tp_side = "BUY"
+            # Check if TP order is already placed
+            if symbol in self.tp_tracker:
+                logger.info(f"TP order already placed for {symbol}. Skipping.")
+                return
 
-                    logger.info(f"Placing TP order for {symbol}: Side={tp_side}, Price={tp_price}")
-                    self.rest_client.place_take_profit_order(symbol, tp_side, quantity, tp_price)
+            # Calculate TP price and place TP order
+            try:
+                take_profit_percent = 0.5  # Example TP percent; you can adjust dynamically
+                if side == "BUY":
+                    tp_price = avg_price * (1 + take_profit_percent / 100)
+                    tp_side = "SELL"
+                else:
+                    tp_price = avg_price * (1 - take_profit_percent / 100)
+                    tp_side = "BUY"
 
-                    # Track that the TP order was placed
-                    self.tp_tracker[symbol] = True
-                except Exception as e:
-                    logger.error(f"Failed to place TP order for {symbol}: {e}", exc_info=True)
+                logger.info(f"Placing TP order for {symbol}: Side={tp_side}, Price={tp_price}")
+                tp_order_id = self.rest_client.place_take_profit_order(symbol, tp_side, quantity, tp_price)
+
+                # Track the TP order with its orderId
+                self.tp_tracker[symbol] = tp_order_id
+                logger.info(f"Tracked TP order for {symbol}: {tp_order_id}")
+            except Exception as e:
+                logger.error(f"Failed to place TP order for {symbol}: {e}", exc_info=True)
 
 
     def stop(self):
