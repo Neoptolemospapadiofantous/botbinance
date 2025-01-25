@@ -192,7 +192,12 @@ class BinanceRESTClient:
             # Cancel existing TP order if tracked
             tp_order_id = self.tp_tracker.get(symbol)
             if tp_order_id:
-                self.cancel_existing_tp(symbol, tp_order_id)
+                logger.info(f"Cancelling existing TP order {tp_order_id} for {symbol}")
+                try:
+                    self.cancel_existing_tp(symbol, tp_order_id)
+                    del self.tp_tracker[symbol]
+                except Exception as e:
+                    logger.error(f"Failed to cancel existing TP order for {symbol}: {e}", exc_info=True)
 
             # Determine close side and quantity
             close_side = "SELL" if position_amt > 0 else "BUY"

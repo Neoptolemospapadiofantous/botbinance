@@ -142,12 +142,17 @@ class BinanceWebSocket:
                 del self.tp_tracker[symbol]  # Clean up tracker after exit
                 return
 
-            # Check if TP order is already placed
+            # Cancel existing TP order if it exists
             if symbol in self.tp_tracker:
-                logger.info(f"TP order already placed for {symbol}. Skipping.")
-                return
+                logger.info(f"Existing TP order found for {symbol}. Cancelling it before placing a new one.")
+                try:
+                    tp_order_id = self.tp_tracker[symbol]
+                    self.rest_client.cancel_existing_tp(symbol, tp_order_id)
+                    del self.tp_tracker[symbol]
+                except Exception as e:
+                    logger.error(f"Failed to cancel existing TP order for {symbol}: {e}", exc_info=True)
 
-            # Calculate TP price and place TP order
+            # Calculate TP price and place a new TP order
             try:
                 take_profit_percent = 0.2  # Example TP percent; you can adjust dynamically
                 if side == "BUY":
@@ -160,11 +165,12 @@ class BinanceWebSocket:
                 logger.info(f"Placing TP order for {symbol}: Side={tp_side}, Price={tp_price}")
                 tp_order_id = self.rest_client.place_take_profit_order(symbol, tp_side, quantity, tp_price)
 
-                # Track the TP order with its orderId
+                # Track the new TP order with its orderId
                 self.tp_tracker[symbol] = tp_order_id
                 logger.info(f"Tracked TP order for {symbol}: {tp_order_id}")
             except Exception as e:
                 logger.error(f"Failed to place TP order for {symbol}: {e}", exc_info=True)
+
 
 
     def stop(self):
