@@ -6,7 +6,7 @@ from utils import parse_webhook_to_payload
 from dotenv import load_dotenv
 import os
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
 # Initialize Flask app
@@ -24,25 +24,34 @@ ws_client = BinanceWebSocket(rest_client)
 def webhook():
     """
     Handle incoming TradingView webhook and process orders based on the signal.
+    
+    Example:
+    {
+      "value": "Order BUY @ 24.379 filled on LINKUSDT\nNew strategy position is 1",
+      "trade_info": {
+        "ticker": "LINKUSDT",
+        "contracts": "1",
+        "leverage": "10",
+        "take_profit": "0.5"
+      }
+    }
     """
     try:
         logger.info("Webhook received.")
         data = request.get_json()
         logger.debug(f"Webhook payload received: {data}")
 
-        # Parse the payload
+        # Parse the payload into a consistent dict
         payload = parse_webhook_to_payload(data)
         logger.info(f"Parsed payload: {payload}")
 
-        # Determine action based on trade_type
+        # Check what type of trade it is (BUY, SELL, or EXIT)
         trade_type = payload["trade_type"]
 
         if trade_type == "EXIT":
-            # Exit position
             logger.info(f"Exit signal received for {payload['symbol']}.")
             response = rest_client.close_position(payload["symbol"])
         elif trade_type == "SELL":
-            # Sell position
             logger.info(f"Sell signal received for {payload['symbol']}.")
             response = rest_client.place_market_order(
                 symbol=payload["symbol"],
@@ -52,7 +61,6 @@ def webhook():
                 take_profit_percent=payload.get("take_profit")
             )
         elif trade_type == "BUY":
-            # Buy position
             logger.info(f"Buy signal received for {payload['symbol']}.")
             response = rest_client.place_market_order(
                 symbol=payload["symbol"],

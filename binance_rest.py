@@ -18,13 +18,15 @@ class BinanceRESTClient:
         self.api_key = os.getenv("BINANCE_API_KEY")
         self.secret_key = os.getenv("BINANCE_SECRET_KEY")
         self.base_url = os.getenv("BASE_URL")
-        self.tp_tracker = {}  # Track TP orders by symbol
+        # self.tp_tracker = {}  # Track TP orders by symbol
         
         if not all([self.api_key, self.secret_key, self.base_url]):
             raise ValueError("Missing required environment variables. Check your .env file.")
 
     def create_signature(self, params):
+        # Build a query string
         query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        # Sign it with HMAC-SHA256 using self.secret_key
         return hmac.new(
             self.secret_key.encode("utf-8"),
             query_string.encode("utf-8"),
@@ -39,15 +41,17 @@ class BinanceRESTClient:
 
     def place_market_order(self, symbol, side, quantity, leverage=None, take_profit_percent=None):
         """
-        Places a MARKET order on Binance Futures and optionally sets a take-profit.
+        Places a MARKET order. 
+        If you want a quick TP, you can still call place_take_profit_order,
+        but do NOT store anything in self.tp_tracker. 
+        The WebSocket will do that.
         """
         try:
-            # Set leverage if provided
+            # 1) Set leverage if desired
             if leverage:
                 self.set_leverage(symbol, leverage)
 
-            # Place the market order
-            url = f"{self.base_url}/fapi/v1/order"
+            # 2) Place the MARKET order
             params = {
                 "symbol": symbol,
                 "side": side.upper(),
@@ -58,20 +62,17 @@ class BinanceRESTClient:
             params["signature"] = self.create_signature(params)
             headers = {"X-MBX-APIKEY": self.api_key}
 
+            url = f"{self.base_url}/fapi/v1/order"
             response = requests.post(url, headers=headers, params=params)
             response.raise_for_status()
 
             order_response = response.json()
             logger.info(f"Market order response: {order_response}")
 
-            # Extract the average price
+            # If there's a TP percent, we can place a quick TP
+            # but do not track it here, the WebSocket tracks TPs
             avg_price = float(order_response.get("avgPrice", 0))
-            if avg_price == 0:
-                logger.warning("Average price not found in order response. Skipping TP order.")
-                return order_response
-
-            # Calculate and place take-profit order if applicable
-            if take_profit_percent:
+            if take_profit_percent and avg_price != 0:
                 if side.upper() == "BUY":
                     tp_price = avg_price * (1 + take_profit_percent / 100)
                     tp_side = "SELL"
@@ -79,7 +80,6 @@ class BinanceRESTClient:
                     tp_price = avg_price * (1 - take_profit_percent / 100)
                     tp_side = "BUY"
 
-                logger.info(f"Placing TP order: Symbol={symbol}, Side={tp_side}, Price={tp_price}")
                 self.place_take_profit_order(symbol, tp_side, quantity, tp_price)
 
             return order_response
@@ -111,15 +111,16 @@ class BinanceRESTClient:
 
     def place_take_profit_order(self, symbol, side, quantity, take_profit_price):
         """
-        Place a TAKE_PROFIT_MARKET order and track it in the TP tracker.
+        Places a TAKE_PROFIT_MARKET order at the given stopPrice.
+        Does NOT store or track this order locally. The WebSocket does that.
         """
         try:
             tp_params = {
                 "symbol": symbol,
                 "side": side,
                 "type": "TAKE_PROFIT_MARKET",
-                "stopPrice": "{:.2f}".format(take_profit_price),
-                "quantity": "{:.1f}".format(quantity),
+                "stopPrice": f"{take_profit_price:.2f}",
+                "quantity": f"{quantity:.1f}",
                 "timestamp": self.get_server_time(),
                 "recvWindow": 5000,
             }
@@ -127,21 +128,21 @@ class BinanceRESTClient:
             headers = {"X-MBX-APIKEY": self.api_key}
 
             url = f"{self.base_url}/fapi/v1/order"
-            response = requests.post(url, headers=headers, data=tp_params)
-            logger.debug(f"Take-profit response: {response.text}")
+            resp = requests.post(url, headers=headers, data=tp_params)
+            logger.debug(f"Take-profit response: {resp.text}")
 
-            if response.status_code == 200:
-                tp_order_id = response.json()["orderId"]
-                # Add to TP tracker
-                self.tp_tracker[symbol] = tp_order_id
-                logger.info(f"Take-profit order successfully placed: {response.json()}")
+            if resp.status_code == 200:
+                data = resp.json()
+                tp_order_id = data["orderId"]
+                logger.info(f"Take-profit order successfully placed: {data}")
+                return tp_order_id
             else:
-                logger.error(f"Failed to place take-profit order: {response.text}")
+                logger.error(f"Failed to place take-profit order: {resp.text}")
+                return None
 
         except Exception as e:
             logger.error(f"Error placing take-profit order: {e}", exc_info=True)
-
-
+            return None
 
     def get_listen_key(self):
         """
@@ -164,72 +165,53 @@ class BinanceRESTClient:
     def close_position(self, symbol):
         """
         Close an open position by placing a MARKET order in the opposite direction.
+        No local tp_tracker usage; we rely on the WebSocket for all TP logic.
         """
         try:
             logger.info(f"Fetching position info for symbol: {symbol}")
 
-            # Fetch position details
+            # 1) Fetch position details
             url = f"{self.base_url}/fapi/v2/positionRisk"
             params = {"timestamp": self.get_server_time()}
             params["signature"] = self.create_signature(params)
             headers = {"X-MBX-APIKEY": self.api_key}
 
             response = requests.get(url, headers=headers, params=params)
-            logger.debug(f"PositionRisk response: {response.text}")
             response.raise_for_status()
 
             positions = response.json()
             position = next((p for p in positions if p["symbol"] == symbol), None)
-
             if not position:
                 raise ValueError(f"No position found for symbol: {symbol}")
 
             position_amt = float(position["positionAmt"])
             if position_amt == 0:
-                logger.info(f"No open position to close for symbol: {symbol}")
+                logger.info(f"No open position to close for {symbol}")
                 return {"message": f"No position to close for {symbol}", "status": "success"}
 
-            # Cancel existing TP order if tracked
-            tp_order_id = self.tp_tracker.get(symbol)
-            if tp_order_id:
-                logger.info(f"Cancelling existing TP order {tp_order_id} for {symbol}")
-                try:
-                    self.cancel_existing_tp(symbol, tp_order_id)
-                    del self.tp_tracker[symbol]
-                except Exception as e:
-                    logger.error(f"Failed to cancel existing TP order for {symbol}: {e}", exc_info=True)
-
-            # Determine close side and quantity
+            # 2) Flatten the position with a MARKET order in the opposite side
             close_side = "SELL" if position_amt > 0 else "BUY"
             quantity = abs(position_amt)
+            logger.info(f"Placing MARKET order to close position: {symbol}, side={close_side}, qty={quantity}")
 
-            # Place MARKET order to close position
-            logger.info(f"Placing MARKET order to close position: {symbol}, Side={close_side}, Quantity={quantity}")
-            url = f"{self.base_url}/fapi/v1/order"
-            params = {
+            order_url = f"{self.base_url}/fapi/v1/order"
+            close_params = {
                 "symbol": symbol,
                 "side": close_side,
                 "type": "MARKET",
                 "quantity": f"{quantity:.6f}",
                 "timestamp": self.get_server_time(),
             }
-            params["signature"] = self.create_signature(params)
-            response = requests.post(url, headers=headers, params=params)
-            logger.debug(f"Close position order response: {response.text}")
+            close_params["signature"] = self.create_signature(close_params)
+            close_headers = {"X-MBX-APIKEY": self.api_key}
 
-            response.raise_for_status()
-            close_response = response.json()
+            resp = requests.post(order_url, headers=close_headers, params=close_params)
+            resp.raise_for_status()
 
-            # Remove symbol from TP tracker after exiting
-            if symbol in self.tp_tracker:
-                del self.tp_tracker[symbol]
-
+            close_response = resp.json()
             logger.info(f"Position closed successfully for {symbol}: {close_response}")
             return close_response
 
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error closing position for {symbol}: {e.response.text}")
-            raise
         except Exception as e:
             logger.error(f"Error closing position for {symbol}: {e}", exc_info=True)
             raise

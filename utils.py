@@ -10,18 +10,17 @@ def parse_webhook_to_payload(webhook_data):
     try:
         logger.info(f"Parsing webhook data: {webhook_data}")
 
-        # Extract fields from webhook data
         value = webhook_data["value"]
         trade_info = webhook_data["trade_info"]
 
-        # Extract action (BUY/SELL)
+        # e.g. "Order BUY @ 24.379 filled on LINKUSDT\nNew strategy position is 1"
         action = value.split(" ")[1].upper()  # Extract "BUY" or "SELL"
 
-        # Extract strategy position (New position: 0 for exit, <0 for sell, >0 for buy)
+        # Extract "New strategy position is X"
         new_position_str = value.split("New strategy position is")[-1].strip().rstrip(".")
-        new_position = float(new_position_str)  # Change to float to handle decimals
+        new_position = float(new_position_str)
 
-        # Determine trade type
+        # Determine trade_type
         if new_position == 0:
             trade_type = "EXIT"
         elif new_position < 0:
@@ -29,19 +28,18 @@ def parse_webhook_to_payload(webhook_data):
         else:
             trade_type = "BUY"
 
-        # Prepare payload
-        ticker = trade_info["ticker"]
-        contracts = trade_info["contracts"]
-        leverage = trade_info["leverage"]
-        take_profit = trade_info.get("take_profit")  # Optional
+        ticker = trade_info["ticker"]        # e.g. "LINKUSDT"
+        contracts = trade_info["contracts"]  # e.g. "1"
+        leverage = trade_info["leverage"]    # e.g. "10"
+        take_profit = trade_info.get("take_profit")  # e.g. "0.5"
 
         payload = {
             "symbol": ticker,
-            "side": action,
-            "quantity": contracts,
-            "leverage": leverage,
-            "take_profit": take_profit,
-            "trade_type": trade_type,  # Add trade type to payload
+            "side": action,              # e.g. "BUY" or "SELL"
+            "quantity": contracts,       # e.g. "1"
+            "leverage": leverage,        # e.g. "10"
+            "take_profit": take_profit,  # e.g. "0.5"
+            "trade_type": trade_type,    # e.g. "BUY", "SELL", or "EXIT"
         }
 
         logger.info(f"Generated payload: {payload}")
