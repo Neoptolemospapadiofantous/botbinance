@@ -5,7 +5,19 @@ logging.basicConfig(level=logging.DEBUG)
 
 def parse_webhook_to_payload(webhook_data):
     """
-    Parse the incoming webhook data into a Binance order payload and determine trade type.
+    Parse the incoming webhook data into a standardized Binance order payload and determine trade type.
+    
+    Expected format:
+      {
+        "value": "Order BUY @ 24.379 filled on LINKUSDT\nNew strategy position is 1",
+        "trade_info": {
+            "ticker": "LINKUSDT",
+            "contracts": "1",
+            "leverage": "10",
+            "take_profit": "0.5"   // percentage for normal trades
+        },
+        "timestamp": "1681253674.000"
+      }
     """
     try:
         logger.info(f"Parsing webhook data: {webhook_data}")
@@ -13,14 +25,18 @@ def parse_webhook_to_payload(webhook_data):
         value = webhook_data["value"]
         trade_info = webhook_data["trade_info"]
 
-        # e.g. "Order BUY @ 24.379 filled on LINKUSDT\nNew strategy position is 1"
-        action = value.split(" ")[1].upper()  # Extract "BUY" or "SELL"
+        # Extract the timestamp.
+        timestamp = webhook_data.get("timestamp")
+        if timestamp is None:
+            raise ValueError("Webhook payload is missing the 'timestamp' field.")
 
-        # Extract "New strategy position is X"
+        action = value.split(" ")[1].upper()  # "BUY" or "SELL"
+
+        # Extract "New strategy position is X" and convert to float.
         new_position_str = value.split("New strategy position is")[-1].strip().rstrip(".")
         new_position = float(new_position_str)
 
-        # Determine trade_type
+        # Determine trade type.
         if new_position == 0:
             trade_type = "EXIT"
         elif new_position < 0:
@@ -28,18 +44,19 @@ def parse_webhook_to_payload(webhook_data):
         else:
             trade_type = "BUY"
 
-        ticker = trade_info["ticker"]        # e.g. "LINKUSDT"
-        contracts = trade_info["contracts"]  # e.g. "1"
-        leverage = trade_info["leverage"]    # e.g. "10"
-        take_profit = trade_info.get("take_profit")  # e.g. "0.5"
+        ticker = trade_info["ticker"]
+        contracts = trade_info["contracts"]
+        leverage = trade_info["leverage"]
+        take_profit = trade_info.get("take_profit")  # For normal trades
 
         payload = {
             "symbol": ticker,
-            "side": action,              # e.g. "BUY" or "SELL"
-            "quantity": contracts,       # e.g. "1"
-            "leverage": leverage,        # e.g. "10"
-            "take_profit": take_profit,  # e.g. "0.5"
-            "trade_type": trade_type,    # e.g. "BUY", "SELL", or "EXIT"
+            "side": action,
+            "quantity": contracts,
+            "leverage": leverage,
+            "take_profit": take_profit,
+            "trade_type": trade_type,
+            "timestamp": timestamp
         }
 
         logger.info(f"Generated payload: {payload}")
