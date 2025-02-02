@@ -5,60 +5,55 @@ logging.basicConfig(level=logging.DEBUG)
 
 def parse_webhook_to_payload(webhook_data):
     """
-    Parse the incoming webhook data into a standardized Binance order payload and determine trade type.
-    
-    Expected format:
-      {
-        "value": "Order BUY @ 24.379 filled on LINKUSDT\nNew strategy position is 1",
-        "trade_info": {
-            "ticker": "LINKUSDT",
-            "contracts": "1",
-            "leverage": "10",
-            "take_profit": "0.5"   // percentage for normal trades
-        },
-        "timestamp": "1681253674.000"
-      }
+    Parse the incoming TradingView webhook data.
+    new_position: 0 -> EXIT; <0 -> SELL; >0 -> BUY.
+    The 'side' is derived automatically from 'new_position'.
     """
     try:
         logger.info(f"Parsing webhook data: {webhook_data}")
 
         value = webhook_data["value"]
         trade_info = webhook_data["trade_info"]
-
-        # Extract the timestamp.
         timestamp = webhook_data.get("timestamp")
-        if timestamp is None:
-            raise ValueError("Webhook payload is missing the 'timestamp' field.")
+        if not timestamp:
+            raise ValueError("Missing 'timestamp' in webhook data.")
 
-        action = value.split(" ")[1].upper()  # "BUY" or "SELL"
+        # e.g., "Order BUY @ 24.379 filled on LINKUSDT\nNew strategy position is -1."
+        # We'll IGNORE the second word ("BUY"/"SELL") to prevent contradictions.
 
-        # Extract "New strategy position is X" and convert to float.
-        new_position_str = value.split("New strategy position is")[-1].strip().rstrip(".")
-        new_position = float(new_position_str)
+        # 1) Identify new_position
+        if "New strategy position is" in value:
+            remainder = value.split("New strategy position is")[-1]
+            new_position_str = remainder.strip().rstrip(".")
+            new_position = float(new_position_str)
+        else:
+            new_position = 0.0
 
-        # Determine trade type.
+        # 2) Determine trade_type from new_position
         if new_position == 0:
             trade_type = "EXIT"
+            side = "BUY"  # side not really used for EXIT, but just set something
         elif new_position < 0:
             trade_type = "SELL"
+            side = "SELL"
         else:
             trade_type = "BUY"
+            side = "BUY"
 
         ticker = trade_info["ticker"]
         contracts = trade_info["contracts"]
-        leverage = trade_info["leverage"]
-        take_profit = trade_info.get("take_profit")  # For normal trades
+        leverage = trade_info.get("leverage", "1")
+        take_profit = trade_info.get("take_profit")
 
         payload = {
             "symbol": ticker,
-            "side": action,
+            "side": side,              # now in sync with new_position
             "quantity": contracts,
             "leverage": leverage,
             "take_profit": take_profit,
             "trade_type": trade_type,
             "timestamp": timestamp
         }
-
         logger.info(f"Generated payload: {payload}")
         return payload
 
@@ -69,5 +64,5 @@ def parse_webhook_to_payload(webhook_data):
         logger.error(f"Error parsing webhook data: {e}")
         raise
     except Exception as e:
-        logger.error(f"Error parsing webhook data: {e}")
+        logger.error(f"Error parsing webhook data: {e}", exc_info=True)
         raise
